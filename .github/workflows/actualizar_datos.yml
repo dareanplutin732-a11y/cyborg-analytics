@@ -44,4 +44,4 @@ jobs:
         git config --global user.name 'Cyborg Automation Bot'
         git config --global user.email 'bot@cyborganalytics.com'
         git add data/cyborg_db.sqlite
-        git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Base de datos actualizada por el Servidor Virtual" && git push)
+        git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Base de datos actualizada por el Servidor Virtual" && git pull --rebase origin main && git push))
