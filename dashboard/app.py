@@ -1,142 +1,130 @@
 import streamlit as st
-import pandas as pd
 import sqlite3
+import pandas as pd
 import os
 
-st.set_page_config(page_title="Cyborg Analytics", page_icon="🤖", layout="wide")
+# Configuración inicial de la página
+st.set_page_config(page_title="Cyborg Analytics - Centro de Mando", layout="wide")
 
-# =========================================================================
-# 🎛️ MENÚ LATERAL (SIDEBAR)
-# =========================================================================
-st.sidebar.title("⚙️ Panel de Control")
-st.sidebar.markdown("---")
-deporte_seleccionado = st.sidebar.radio(
-    "Selecciona la Liga a analizar:",
-    ["🏀 NBA (Baloncesto)", "⚾ MLB (Béisbol)"]
-)
+st.title("🤖 CYBORG ANALYTICS - MULTIDEPORTE V4")
+st.subheader("Sistema de Simulación Cuantitativa basado en Distribución de Poisson")
 
-# Variable lógica para filtrar la base de datos
-liga_filtro = "NBA" if "NBA" in deporte_seleccionado else "MLB"
-
-st.title(f"🤖 Cyborg Analytics - {liga_filtro}")
-st.markdown("---")
-
+# Ruta de la base de datos relacional
 db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'cyborg_db.sqlite')
 
-try:
+# Conexión y extracción de datos con un JOIN limpio
+def cargar_datos():
     conexion = sqlite3.connect(db_path)
-    
-    # Alerta de Lesiones (Por ahora solo la mostraremos si estamos en modo NBA)
-    if liga_filtro == "NBA":
-        try:
-            cursor_lesiones = conexion.cursor()
-            cursor_lesiones.execute("SELECT equipo, jugador, impacto_lambda FROM lesiones")
-            lesionados = cursor_lesiones.fetchall()
-            if lesionados:
-                for l in lesionados:
-                    st.error(f"🚨 **IMPACTO DE ÚLTIMA HORA DETECTADO:** {l[1]} ({l[0]}) es BAJA. El modelo ha penalizado su ofensiva con -{l[2]} puntos.")
-        except Exception:
-            pass 
-
-    # Añadimos 'p.liga' a la consulta para poder separar los deportes
-    query = """
-    SELECT 
-        p.liga AS Liga,
-        p.equipo_local AS Local,
-        p.equipo_visitante AS Visitante,
-        c_ml.cuota_local AS Cuota_ML_Local,
-        c_ml.cuota_visitante AS Cuota_ML_Visitante,
-        c_to.linea AS Linea_Casa,
-        c_to.cuota_local AS Cuota_Over,
-        c_to.cuota_visitante AS Cuota_Under,
-        pr.prob_cyborg_local AS Prob_Cyborg_Local,
-        pr.linea_total_proyectada AS Linea_Proyectada,
-        pr.prob_cyborg_over AS Prob_Cyborg_Over
-    FROM partidos p
-    LEFT JOIN cuotas c_ml ON p.id_partido = c_ml.id_partido AND c_ml.mercado = 'Moneyline'
-    LEFT JOIN cuotas c_to ON p.id_partido = c_to.id_partido AND c_to.mercado = 'Totals'
-    LEFT JOIN predicciones pr ON p.id_partido = pr.id_partido
+    consulta = """
+        SELECT 
+            p.liga AS Liga,
+            p.equipo_local AS Local,
+            p.equipo_visitante AS Visitante,
+            c_ml.cuota_local AS Cuota_ML_Local,
+            c_ml.cuota_visitante AS Cuota_ML_Visitante,
+            c_tot.linea AS Linea_Casa,
+            c_tot.cuota_local AS Cuota_Over,
+            c_tot.cuota_visitante AS Cuota_Under,
+            pred.prob_cyborg_local AS Prob_Cyborg_Local,
+            pred.linea_total_proyectada AS Proy_Total_Cyborg,
+            pred.prob_cyborg_over AS Prob_Cyborg_Over
+        FROM partidos p
+        LEFT JOIN cuotas c_ml ON p.id_partido = c_ml.id_partido AND c_ml.mercado = 'Moneyline'
+        LEFT JOIN cuotas c_tot ON p.id_partido = c_tot.id_partido AND c_tot.mercado = 'Totals'
+        LEFT JOIN predicciones pred ON p.id_partido = pred.id_partido
     """
-    
-    df_completo = pd.read_sql_query(query, conexion)
+    df = pd.read_sql_query(consulta, conexion)
     conexion.close()
+    return df
+
+try:
+    df_completo = cargar_datos()
+
+    # Menú lateral expansivo para seleccionar el deporte
+    liga_filtro = st.sidebar.selectbox("🎯 Selecciona la Liga a Monitorear", ["NBA", "MLB", "FUTBOL"])
 
     if not df_completo.empty:
-        # 1. Filtramos solo los partidos del deporte que seleccionaste en el menú
+        # 1. Filtramos solo los partidos del deporte que seleccionaste
         df = df_completo[df_completo['Liga'] == liga_filtro].copy()
         
-        # 2. Escondemos los partidos que aún no han pasado por el cerebro matemático
-        df = df.dropna(subset=['Prob_Cyborg_Local', 'Cuota_ML_Local', 'Cuota_Over'])
-# 1. Filtramos solo los partidos del deporte que seleccionaste en el menú
-        df = df_completo[df_completo['Liga'] == liga_filtro].copy()
-        
-        # --- NUEVO FILTRO ANTI-CLONES ---
+        # --- FILTRO ANTI-CLONES ---
         df = df.drop_duplicates(subset=['Local', 'Visitante'])
         
-        # 2. Escondemos los partidos que aún no han pasado por el cerebro matemático
+        # 2. Escondemos los partidos que aún no han sido procesados por el motor matemático
         df = df.dropna(subset=['Prob_Cyborg_Local', 'Cuota_ML_Local', 'Cuota_Over'])
-        if not df.empty:
-            tab1, tab2 = st.tabs(["🎯 Ganador del Partido (Moneyline)", "📊 Totales de Puntos (Over/Under)"])
-            
-            # --- PESTAÑA 1: GANADOR ---
-            with tab1:
-                st.subheader(f"Análisis de Ventaja (Ganador) - {liga_filtro}")
-                df['Prob_Casa_Local'] = 1 / df['Cuota_ML_Local']
-                df['Edge_Local'] = df['Prob_Cyborg_Local'] - df['Prob_Casa_Local']
-                
-                df_ml = pd.DataFrame({
-                    'Partido': df['Local'] + " vs " + df['Visitante'],
-                    'Cuota Local': df['Cuota_ML_Local'],
-                    'Prob. Casa': (df['Prob_Casa_Local'] * 100).round(1).astype(str) + '%',
-                    'Prob. Cyborg': (df['Prob_Cyborg_Local'] * 100).round(1).astype(str) + '%',
-                    'Edge Ventaja (%)': (df['Edge_Local'] * 100).round(2)
-                })
-                
-                st.dataframe(df_ml.style.map(lambda v: f"color: {'#00FF00' if v > 0 else '#FF4B4B'}; font-weight: bold", subset=['Edge Ventaja (%)']), use_container_width=True, hide_index=True)
-                
-                mejor_ml = df_ml.loc[df_ml['Edge Ventaja (%)'].idxmax()]
-                if mejor_ml['Edge Ventaja (%)'] > 0:
-                    st.success(f"🔥 **PICK RECOMENDADO GANADOR:** **{mejor_ml['Partido'].split(' vs ')[0]}** | Cuota: **{mejor_ml['Cuota Local']}** (Edge: +{mejor_ml['Edge Ventaja (%)']}%)")
 
-            # --- PESTAÑA 2: OVER/UNDER ---
-            with tab2:
-                st.subheader(f"Análisis de Probabilidad Acumulada (Totales) - {liga_filtro}")
-                
-                df['Prob_Casa_Over'] = 1 / df['Cuota_Over']
-                df['Prob_Casa_Under'] = 1 / df['Cuota_Under']
-                df['Prob_Cyborg_Under'] = 1 - df['Prob_Cyborg_Over']
-                df['Edge_Over'] = df['Prob_Cyborg_Over'] - df['Prob_Casa_Over']
-                df['Edge_Under'] = df['Prob_Cyborg_Under'] - df['Prob_Casa_Under']
-                
-                df_ou = pd.DataFrame({
-                    'Partido': df['Local'] + " vs " + df['Visitante'],
-                    'Línea Casa': df['Linea_Casa'],
-                    'Proyección Cyborg': df['Linea_Proyectada'].round(1),
-                    'Cuota Over': df['Cuota_Over'],
-                    'Prob. Over (Cyborg)': (df['Prob_Cyborg_Over'] * 100).round(1).astype(str) + '%',
-                    'Edge Over (%)': (df['Edge_Over'] * 100).round(2),
-                    'Cuota Under': df['Cuota_Under'],
-                    'Prob. Under (Cyborg)': (df['Prob_Cyborg_Under'] * 100).round(1).astype(str) + '%',
-                    'Edge Under (%)': (df['Edge_Under'] * 100).round(2)
-                })
-                
-                st.dataframe(df_ou.style.map(lambda v: f"color: {'#00FF00' if v > 0 else '#FF4B4B'}; font-weight: bold", subset=['Edge Over (%)', 'Edge Under (%)']), use_container_width=True, hide_index=True)
-                
-                max_edge_over = df_ou['Edge Over (%)'].max()
-                max_edge_under = df_ou['Edge Under (%)'].max()
-                
-                if max_edge_over > max_edge_under and max_edge_over > 0:
-                    pick = df_ou.loc[df_ou['Edge Over (%)'].idxmax()]
-                    st.success(f"🔥 **PICK RECOMENDADO TOTALES:** **Over {pick['Línea Casa']}** en el partido {pick['Partido']} | Cuota: **{pick['Cuota Over']}** (Edge: +{pick['Edge Over (%)']}%)")
-                elif max_edge_under > max_edge_over and max_edge_under > 0:
-                    pick = df_ou.loc[df_ou['Edge Under (%)'].idxmax()]
-                    st.success(f"🔥 **PICK RECOMENDADO TOTALES:** **Under {pick['Línea Casa']}** en el partido {pick['Partido']} | Cuota: **{pick['Cuota Under']}** (Edge: +{pick['Edge Under (%)']}%)")
-                else:
-                    st.warning("⚠️ Sin valor matemático detectado en las líneas de Over/Under actuales.")
+        if not df.empty:
+            # --- CÁLCULOS ESTADÍSTICOS DE VALOR (EDGES) ---
+            # Implicación matemática de las cuotas de la casa (1 / Cuota)
+            df['Prob_Casa_Local'] = 1 / df['Cuota_ML_Local']
+            df['Prob_Casa_Over'] = 1 / df['Cuota_Over']
+
+            # Cálculo minucioso del Edge (Nuestra Probabilidad - Probabilidad de la Casa)
+            df['Edge_Ganador_Local'] = (df['Prob_Cyborg_Local'] - df['Prob_Casa_Local']) * 100
+            df['Edge_Over'] = (df['Prob_Cyborg_Over'] - df['Prob_Casa_Over']) * 100
+
+            # --- DISEÑO Y PRESENTACIÓN DE LA TABLA COMPLETA ---
+            columnas_visibles = [
+                'Local', 'Visitante', 
+                'Cuota_ML_Local', 'Prob_Cyborg_Local', 'Edge_Ganador_Local',
+                'Linea_Casa', 'Cuota_Over', 'Proy_Total_Cyborg', 'Prob_Cyborg_Over', 'Edge_Over'
+            ]
+            
+            df_display = df[columnas_visibles].copy()
+
+            # Formateo visual estricto para que los porcentajes y cuotas se lean perfectos
+            formatos = {
+                'Cuota_ML_Local': '{:.2f}',
+                'Prob_Cyborg_Local': '{:.1%}',
+                'Edge_Ganador_Local': '{:+.1f}%',
+                'Linea_Casa': '{:.1f}',
+                'Cuota_Over': '{:.2f}',
+                'Proy_Total_Cyborg': '{:.2f}',
+                'Prob_Cyborg_Over': '{:.1%}',
+                'Edge_Over': '{:+.1f}%'
+            }
+
+            # Aplicamos estilos de colores llamativos para cazar los Edges positivos de un vistazo
+            def color_edge(val):
+                try:
+                    num = float(val.replace('%', ''))
+                    if num > 10.0: # Resaltado verde fuerte para ventajas brutales mayores al 10%
+                        return 'background-color: #2ecc71; color: black; font-weight: bold;'
+                    elif num > 0.0: # Verde claro para ventajas estándar
+                        return 'background-color: #a2f2b7; color: black;'
+                    elif num < -5.0: # Rojo suave si la casa tiene la ventaja completa
+                        return 'background-color: #f7a1a1; color: black;'
+                except:
+                    pass
+                return ''
+
+            st.write(f"### 📊 Panel de Cuotas y Ventajas Matemáticas Encontradas para: **{liga_filtro}**")
+            
+            # Renderizamos la tabla estilizada en la interfaz web
+            st.dataframe(
+                df_display.style.format(formatos).map(color_edge, subset=['Edge_Ganador_Local', 'Edge_Over']),
+                use_container_width=True,
+                height=500
+            )
+
+            # Métricas rápidas de control de mando en la parte inferior
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                max_edge_ml = df['Edge_Ganador_Local'].max()
+                if max_edge_ml > 0:
+                    partido_ml = df[df['Edge_Ganador_Local'] == max_edge_ml].iloc[0]
+                    st.metric("🔥 Mayor Ventaja en Ganador Directo", f"{partido_ml['Local']} ({max_edge_ml:+.1f}%)")
+            with col2:
+                max_edge_tot = df['Edge_Over'].max()
+                if max_edge_tot > 0:
+                    partido_tot = df[df['Edge_Over'] == max_edge_tot].iloc[0]
+                    st.metric("⚽ Mayor Ventaja en Línea de Goles (Over)", f"{partido_tot['Local']} vs {partido_tot['Visitante']} ({max_edge_tot:+.1f}%)")
+
         else:
-             st.info(f"⚾ Los partidos de la {liga_filtro} ya están en la base de datos, pero el Motor Matemático aún no ha calculado sus predicciones.")
+            st.info(f"📅 No hay partidos con cuotas activas procesados para {liga_filtro} en las próximas horas.")
     else:
-        st.info("Por favor, ejecuta los scrapers para inicializar las tablas.")
+        st.warning("⚠️ La base de datos central está vacía. Verifica que los robots extractores estén corriendo.")
 
 except Exception as e:
-    st.error(f"Error en la carga del Dashboard: {e}")
+    st.error(f"❌ Error crítico en la carga del Dashboard: {e}")
