@@ -35,13 +35,18 @@ jobs:
         python scrapers/get_mlb_odds.py
         python scrapers/get_pitchers.py
 
-    - name: 6. Recalculando Modelos de Poisson Avanzados
+    - name: 6. Ejecutando Scrapers FUTBOL
+      run: |
+        python scrapers/get_soccer_stats.py
+        python scrapers/get_soccer_odds.py
+
+    - name: 7. Recalculando Modelos de Poisson Avanzados
       run: |
         python models/poisson_model.py
 
-    - name: 7. Guardando y subiendo datos nuevos a GitHub
+    - name: 8. Guardando y subiendo datos nuevos a GitHub
       run: |
         git config --global user.name 'Cyborg Automation Bot'
         git config --global user.email 'bot@cyborganalytics.com'
         git add data/cyborg_db.sqlite
-        git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Base de datos actualizada por el Servidor Virtual" && git pull --rebase origin main && git push))
+        git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Base de datos actualizada por el Servidor Virtual" && git pull --rebase origin main && git push)
